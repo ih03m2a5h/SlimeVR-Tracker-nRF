@@ -50,7 +50,7 @@
 	};
 
 	aliases {
-		// sw0 = &button0; // Uncomment to Enable SW0
+		sw0 = &button0; // Uncomment to Enable SW0
 		pwm-led1 = &pwm_led1;
 		pwm-led2 = &pwm_led2;
 	};
@@ -65,7 +65,8 @@
 	};
 
 	zephyr,user {
-		int0-gpios = <&gpio0 3 0>;
+		int0-gpios = <&gpio1 11 0>;
+		dcdc-gpios = <&gpio0 3 (GPIO_ACTIVE_LOW)>;
 		led-gpios = <&gpio0 17 (GPIO_OPEN_DRAIN|GPIO_ACTIVE_LOW)>;
 		// clk-gpios = <&gpio0 28 GPIO_OPEN_DRAIN>; // Uncomment and set to correct pin if using an external clock (crystal oscillator)
 	};
@@ -75,21 +76,24 @@
 /delete-node/ &uart0;
 
 &i2c1 {
+	status = "disabled";
 	compatible = "nordic,nrf-twim";
 	zephyr,concat-buf-size = <1023>;
 	zephyr,flash-buf-max-size = <1023>;
 	clock-frequency = <I2C_BITRATE_FAST>;
 
 	imu: imu@0 { // any address out of range (00, 7f, etc. will search all addresses and stored address first if available, specify an address here to search first otherwise
+		status = "disabled";
 		compatible = "i2c-device";
 		label = "imu";
 		reg = <0>;
 	};
 
 	mag: mag@0 {
+		status = "disabled";
 		compatible = "i2c-device";
 		label = "mag";
-		reg = <0>;
+		reg = <0>; // 0x7c>;
 	};
 
 };
@@ -107,7 +111,7 @@
 	cs-gpios = <&gpio1 12 GPIO_ACTIVE_LOW>;
 
 	imu_spi: imu_spi@0 {
-		compatible = "vnd,spi-device";
+		compatible = "invensense,icm45686";
 		spi-max-frequency = <DT_FREQ_M(24)>;
 		label = "imu-spi";
 		reg = <0>;

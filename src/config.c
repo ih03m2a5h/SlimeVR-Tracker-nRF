@@ -1,6 +1,8 @@
 #include "globals.h"
 #include "system/system.h"
 
+#include <zephyr/sys/printk.h>
+
 #include "config.h"
 
 #if DT_NODE_HAS_STATUS_OKAY(DT_ALIAS(retainedmemdevice))
