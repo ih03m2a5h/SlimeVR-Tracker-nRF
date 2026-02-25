@@ -1,0 +1,114 @@
+#include "../socs/nrf54l15_cpuapp.overlay"
+
+/delete-node/ &{/pin-controller/uart21_default/group2/};
+/delete-node/ &{/pin-controller/uart21_default/group1/};
+&vbat_pwr {
+	/delete-property/ enable-gpios;
+};
+
+/ {
+	/*
+	 * XIAO nRF54L15 (cpuapp) application overlay
+	 *
+	 * This overlay intentionally relies on the board's *standard* pin mapping
+	 * (Zephyr's xiao_nrf54l15 board DTS) for the buses:
+	 * - I2C: D4/D5
+	 * - SPI: D8/D9/D10
+	 *
+	 * Only the required nodes for SlimeVR-Tracker-nRF are added here.
+	 */
+
+	chosen {
+		zephyr,console = &uart20;
+		zephyr,shell-uart = &uart20;
+	};
+
+	battery-divider {
+		compatible = "voltage-divider";
+		status = "okay";
+		/* XIAO nRF54L15 Sense Battery: AIN7 (P1.14) with Power Control (P1.15) */
+		io-channels = <&adc 7>;
+		output-ohms = <1000000>;
+		full-ohms = <2000000>;
+		power-gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>;
+	};
+
+	zephyr,user {
+		/*
+		 * Optional wiring-specific pins can be added here.
+		 * Examples:
+		 *  - int0-gpios = <&gpio? ? GPIO_ACTIVE_HIGH>;
+		 *  - led-gpios  = <&gpio? ? (GPIO_OPEN_DRAIN | GPIO_ACTIVE_LOW)>;
+		 */
+	};
+};
+
+/* Built-in IMU (LSM6DS3TR-C) on I2C30 */
+&i2c30 {
+	status = "disabled";
+	clock-frequency = <I2C_BITRATE_FAST>;
+
+	lsm6ds3tr_c: lsm6ds3tr-c@6a {
+		compatible = "st,lsm6dsl";
+		reg = <0x6a>;
+		irq-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+		label = "lsm6ds3tr-c";
+	};
+};
+
+/* SPI IMU (+ optional SPI magnetometer): use SPI22 instead of SPI00 to avoid conflict with UART20 */
+&spi22 {
+	status = "okay";
+	/* LSM6DSV16X requires SPI Mode 0 (CPOL=0, CPHA=0) or Mode 3 (CPOL=1, CPHA=1) */
+	/* Try Mode 3 - some sensors work better with this mode */
+
+	imu_spi: imu_spi@0 {
+		compatible = "vnd,spi-device";
+		// compatible = "st,lsm6dsv16x";
+		spi-max-frequency = <DT_FREQ_M(10)>; /* Start with 1MHz for debugging */
+		label = "imu-spi";
+		reg = <0>;
+		/* Mode 3: CPOL=1, CPHA=1 */
+		spi-cpol;
+		spi-cpha;
+	};
+
+	// mag_spi: mag_spi@1 {
+	// 	compatible = "vnd,spi-device";
+	// 	spi-max-frequency = <DT_FREQ_M(10)>;
+	// 	label = "mag-spi";
+	// 	reg = <1>;
+	// };
+
+	cs-gpios = <&gpio1 7 GPIO_ACTIVE_LOW>;
+};
+
+/*
+ * Note: This board DTS does not define an on-board IMU node label.
+ * If a board variant adds an IMU, disable it in that variant's overlay.
+ */
+
+
+&uart21_sleep {
+	group1 {
+		psels = <NRF_PSEL(UART_TX, 2, 8)>;
+	};
+};
+
+&uart20 {
+	status = "okay";
+};
+
+
+&spi22_default {
+	group1 {
+		psels = <NRF_PSEL(SPIM_SCK, 1, 6)>,
+				<NRF_PSEL(SPIM_MOSI, 1, 4)>,
+				<NRF_PSEL(SPIM_MISO, 1, 5)>;
+	};
+};
+
+/* Explicitly disable I2C22 at the end of the overlay to override any base board settings */
+&i2c22 {
+	status = "disabled";
+};
