@@ -1,0 +1,7 @@
+[env]
+ZEPHYR_BASE = "{{env.HOME}}/ncs/v3.2.3/zephyr"
+ZEPHYR_SDK_INSTALL_DIR = "{{env.HOME}}/ncs/toolchains/927563c840/opt/zephyr-sdk"
+ZEPHYR_TOOLCHAIN_VARIANT = "zephyr"
+_.path = "{{env.HOME}}/ncs/toolchains/927563c840/usr/local/bin"
+LD_LIBRARY_PATH = "{{env.HOME}}/ncs/toolchains/927563c840/usr/local/lib:{{env.HOME}}/ncs/toolchains/927563c840/usr/lib"
+MISE_DISABLE_TOOLS = "python"
