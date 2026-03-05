@@ -38,7 +38,7 @@
 		 * Optional wiring-specific pins can be added here.
 		 * Examples:
 		 *  - int0-gpios = <&gpio? ? GPIO_ACTIVE_HIGH>;
-		 *  - led-gpios  = <&gpio? ? (GPIO_OPEN_DRAIN | GPIO_ACTIVE_LOW)>;
+		 *  - led-gpios = <&gpio? ? (GPIO_OPEN_DRAIN | GPIO_ACTIVE_LOW)>;
 		 */
 	};
 };
@@ -56,8 +56,8 @@
 	};
 };
 
-/* SPI IMU (+ optional SPI magnetometer): use SPI22 instead of SPI00 to avoid conflict with UART20 */
-&spi22 {
+/* SPI IMU (+ optional SPI magnetometer) */
+&spi00 {
 	status = "okay";
 	/* LSM6DSV16X requires SPI Mode 0 (CPOL=0, CPHA=0) or Mode 3 (CPOL=1, CPHA=1) */
 	/* Try Mode 3 - some sensors work better with this mode */
@@ -65,7 +65,7 @@
 	imu_spi: imu_spi@0 {
 		compatible = "vnd,spi-device";
 		// compatible = "st,lsm6dsv16x";
-		spi-max-frequency = <DT_FREQ_M(10)>; /* Start with 1MHz for debugging */
+		spi-max-frequency = <DT_FREQ_M(8)>; /* Start with 1MHz for debugging */
 		label = "imu-spi";
 		reg = <0>;
 		/* Mode 3: CPOL=1, CPHA=1 */
@@ -74,13 +74,13 @@
 	};
 
 	// mag_spi: mag_spi@1 {
-	// 	compatible = "vnd,spi-device";
-	// 	spi-max-frequency = <DT_FREQ_M(10)>;
-	// 	label = "mag-spi";
-	// 	reg = <1>;
+		//     compatible = "vnd,spi-device";
+		//     spi-max-frequency = <DT_FREQ_M(10)>;
+		//     label = "mag-spi";
+		//     reg = <1>;
 	// };
 
-	cs-gpios = <&gpio1 7 GPIO_ACTIVE_LOW>;
+	cs-gpios = <&gpio2 7 GPIO_ACTIVE_LOW>;
 };
 
 /*
@@ -100,13 +100,7 @@
 };
 
 
-&spi22_default {
-	group1 {
-		psels = <NRF_PSEL(SPIM_SCK, 1, 6)>,
-				<NRF_PSEL(SPIM_MOSI, 1, 4)>,
-				<NRF_PSEL(SPIM_MISO, 1, 5)>;
-	};
-};
+
 
 /* Explicitly disable I2C22 at the end of the overlay to override any base board settings */
 &i2c22 {
