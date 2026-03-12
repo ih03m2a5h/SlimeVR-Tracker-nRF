@@ -1,0 +1,54 @@
+/*
+ * AN54LQ-15 (nRF54L15 module) application overlay for SlimeVR-Tracker-nRF
+ *
+ * Default wiring (same as an54lq-15-pinctrl.dtsi):
+ *   UART20 : TX=P1.4, RX=P1.5
+ *   SPI00  : SCK=P2.6, MOSI=P2.2, MISO=P2.4, CS=P2.5
+ *   I2C30  : SDA=P0.2, SCL=P0.3
+ */
+
+/ {
+	chosen {
+		zephyr,console = &uart20;
+		zephyr,shell-uart = &uart20;
+	};
+
+	/*
+	 * Battery: use VDDHDIV5 (channel 12) to measure VDD on nRF54L15.
+	 * battery.c handles ch12 specially → input = NRF_SAADC_VDDHDIV5.
+	 * output-ohms=1 / full-ohms=5 scale the reading ×5 → actual VDD in mV.
+	 * Works for designs where VBAT is connected directly to VDD (no ext. reg.).
+	 */
+	battery-divider {
+		compatible = "voltage-divider";
+		status = "okay";
+		io-channels = <&adc 12>; /* VDDHDIV5 — triggers nRF54L15 VDD path */
+		output-ohms = <1>;
+		full-ohms = <5>;
+	};
+
+	zephyr,user {
+		/*
+		 * Optional wiring-specific pins.
+		 * Examples:
+		 *  - int0-gpios = <&gpio? ? GPIO_ACTIVE_HIGH>;
+		 *  - led-gpios  = <&gpio? ? (GPIO_OPEN_DRAIN | GPIO_ACTIVE_LOW)>;
+		 */
+	};
+};
+
+/* SPI00: high-speed SPI for IMU (+ optional SPI magnetometer) */
+&spi00 {
+	imu_spi: imu_spi@0 {
+		compatible = "vnd,spi-device";
+		spi-max-frequency = <DT_FREQ_M(8)>;
+		label = "imu-spi";
+		reg = <0>;
+		/* Mode 3: CPOL=1, CPHA=1 — works with most IMUs */
+		spi-cpol;
+		spi-cpha;
+	};
+
+	/* CS pin: P2.5 — adjust to match your hardware wiring */
+	cs-gpios = <&gpio2 5 GPIO_ACTIVE_LOW>;
+};

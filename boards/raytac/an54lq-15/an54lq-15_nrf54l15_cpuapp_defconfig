@@ -1,0 +1,8 @@
+CONFIG_ARM_MPU=y
+
+# Required for proper power management of fast peripherals (SPI00 etc.)
+CONFIG_PM_DEVICE=y
+CONFIG_NRFX_POWER=y
+
+# Enable regulator framework for internal nRF54L15 DCDC/LDO
+CONFIG_REGULATOR=y

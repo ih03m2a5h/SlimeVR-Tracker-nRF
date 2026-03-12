@@ -10,4 +10,5 @@ tests:
       - nrf54l15dk/nrf54l15/cpuapp
       - xiao_ble/nrf52840
       - xiao_ble/nrf52840/sense
+      - an54lq-15/nrf54l15/cpuapp
     sysbuild: true

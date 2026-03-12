@@ -1,0 +1,10 @@
+identifier: an54lq-15/nrf54l15/cpuapp
+name: Raytac AN54LQ-15 module (nRF54L15)
+vendor: raytac
+arch: arm
+toolchain:
+  - zephyr
+sysbuild: true
+ram: 188
+flash: 1428
+supported: []
