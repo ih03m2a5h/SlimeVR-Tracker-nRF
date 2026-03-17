@@ -1,5 +1,3 @@
-#include "../socs/nrf54l15_cpuapp.overlay"
-
 /delete-node/ &{/pin-controller/uart21_default/group2/};
 /delete-node/ &{/pin-controller/uart21_default/group1/};
 &vbat_pwr {
