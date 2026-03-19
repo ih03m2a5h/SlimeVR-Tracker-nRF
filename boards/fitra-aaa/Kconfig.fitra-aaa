@@ -1,0 +1,8 @@
+# Copyright (c) 2024 Nordic Semiconductor ASA
+# Copyright (c) 2025 Hitohira.
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_FITRA_AAA
+	select SOC_NRF54L15_CPUAPP if BOARD_FITRA_AAA_NRF54L15_CPUAPP
+	select SOC_NRF54L15_CPUFLPR if BOARD_FITRA_AAA_NRF54L15_CPUFLPR || \
+					    BOARD_FITRA_AAA_NRF54L15_CPUFLPR_XIP

@@ -1,0 +1,128 @@
+// &pwm20 {
+	//     status = "okay";
+	//     pinctrl-0 = <&pwm20_default>;
+	//     pinctrl-1 = <&pwm20_sleep>;
+	//     pinctrl-names = "default", "sleep";
+// };
+
+/ {
+	/*
+	 * Fitra project board (nRF54L15/AN54LQ-15) application overlay
+	 *
+	 * This overlay intentionally relies on the board's *standard* pin mapping
+	 * (Zephyr's fitra-aaa_nrf54l15_cpuapp board DTS) for the buses:
+	 * - I2C: None
+	 * - SPI: P2.6 P2.2 P2.4
+	 *
+	 * Only the required nodes for SlimeVR-Tracker-nRF are added here.
+	 */
+
+	chosen {
+		zephyr,console = &uart20;
+		zephyr,shell-uart = &uart20;
+	};
+
+	battery-divider {
+		compatible = "voltage-divider";
+		status = "okay";
+		/* XIAO nRF54L15 Sense Battery: AIN7 (P1.14) with Power Control (P1.15) */
+		io-channels = <&adc 7>;
+		output-ohms = <1000000>;
+		full-ohms = <2000000>;
+		power-gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>;
+	};
+
+	zephyr,user {
+		/*
+		 * Optional wiring-specific pins can be added here.
+		 * Examples:
+		 *  - int0-gpios = <&gpio? ? GPIO_ACTIVE_HIGH>;
+		 *  - led-gpios = <&gpio? ? (GPIO_OPEN_DRAIN | GPIO_ACTIVE_LOW)>;
+		 */
+	};
+};
+
+&adc {
+	status = "okay";
+};
+
+
+&gpio1 {
+	status = "okay";
+};
+
+&gpio0 {
+	status = "okay";
+};
+
+&gpio2 {
+	status = "okay";
+};
+
+&gpiote20 {
+	status = "okay";
+};
+
+&gpiote30 {
+	status = "okay";
+};
+
+&clock {
+	status = "okay";
+};
+
+/* Built-in IMU (LSM6DS3TR-C) on I2C30 */
+&i2c30 {
+	status = "disabled";
+	clock-frequency = <I2C_BITRATE_FAST>;
+
+	lsm6ds3tr_c: lsm6ds3tr-c@6a {
+		compatible = "st,lsm6dsl";
+		reg = <0x6a>;
+		irq-gpios = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+		label = "lsm6ds3tr-c";
+	};
+};
+
+/* SPI IMU (+ optional SPI magnetometer) */
+&spi00 {
+	status = "okay";
+	/* LSM6DSV16X requires SPI Mode 0 (CPOL=0, CPHA=0) or Mode 3 (CPOL=1, CPHA=1) */
+	/* Try Mode 3 - some sensors work better with this mode */
+
+	imu_spi: imu_spi@0 {
+		compatible = "vnd,spi-device";
+		spi-max-frequency = <DT_FREQ_M(8)>; /* Start with 1MHz for debugging */
+		label = "imu-spi";
+		reg = <0>;
+		/* Mode 3: CPOL=1, CPHA=1 */
+		spi-cpol;
+		spi-cpha;
+	};
+
+	// mag_spi: mag_spi@1 {
+		//     compatible = "vnd,spi-device";
+		//     spi-max-frequency = <DT_FREQ_M(10)>;
+		//     label = "mag-spi";
+		//     reg = <1>;
+	// };
+
+	cs-gpios = <&gpio2 5 GPIO_ACTIVE_LOW>;
+};
+
+/*
+ * Note: This board DTS does not define an on-board IMU node label.
+ * If a board variant adds an IMU, disable it in that variant's overlay.
+ */
+
+
+/* uart20 pinctrl and current-speed are defined in fitra-aaa_common.dtsi */
+&uart20 {
+	status = "okay";
+};
+
+
+/* Explicitly disable I2C22 at the end of the overlay to override any base board settings */
+&i2c22 {
+	status = "disabled";
+};
