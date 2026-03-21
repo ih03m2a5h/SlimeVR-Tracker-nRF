@@ -13,6 +13,7 @@ runners:
       - runners:
           - nrfjprog
           - nrfutil
+          - pyocd
         run: first
         groups:
           - boards:
@@ -24,6 +25,7 @@ runners:
           - nrfjprog
           - jlink
           - nrfutil
+          - pyocd
         run: first
         groups:
           - boards:
@@ -35,6 +37,7 @@ runners:
           - nrfjprog
           - jlink
           - nrfutil
+          - pyocd
         run: last
         groups:
           - boards:
