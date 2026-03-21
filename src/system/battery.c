@@ -8,6 +8,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
@@ -21,12 +22,21 @@
 LOG_MODULE_REGISTER(BATTERY, CONFIG_ADC_LOG_LEVEL);
 
 #define VBATT DT_PATH(battery_divider)
-#define ZEPHYR_USER DT_PATH(zephyr_user)
+
+#if DT_HAS_COMPAT_STATUS_OKAY(nordic_npm2100_vbat)
+#define NPM2100_VBAT DT_COMPAT_GET_ANY_STATUS_OKAY(nordic_npm2100_vbat)
+#define BATTERY_BACKEND_NPM2100 1
+#elif DT_NODE_HAS_STATUS(VBATT, okay)
+#define BATTERY_BACKEND_DIVIDER 1
+#else
+#error "No supported battery measurement backend found"
+#endif
 
 struct io_channel_config {
 	uint8_t channel;
 };
 
+#if defined(BATTERY_BACKEND_DIVIDER)
 struct divider_config {
 	struct io_channel_config io_channel;
 	struct gpio_dt_spec power_gpios;
@@ -39,19 +49,12 @@ struct divider_config {
 };
 
 static const struct divider_config divider_config = {
-#if DT_NODE_HAS_STATUS(VBATT, okay)
 	.io_channel = {
 		DT_IO_CHANNELS_INPUT(VBATT),
 	},
 	.power_gpios = GPIO_DT_SPEC_GET_OR(VBATT, power_gpios, {}),
 	.output_ohm = DT_PROP(VBATT, output_ohms),
 	.full_ohm = DT_PROP(VBATT, full_ohms),
-#else /* /vbatt exists */
-#error "Battery divider node does not exist"
-	.io_channel = {
-		DT_IO_CHANNELS_INPUT(ZEPHYR_USER),
-	},
-#endif /* /vbatt exists */
 };
 
 struct divider_data {
@@ -61,14 +64,15 @@ struct divider_data {
 	int16_t raw;
 };
 static struct divider_data divider_data = {
-#if DT_NODE_HAS_STATUS(VBATT, okay)
 	.adc = DEVICE_DT_GET(DT_IO_CHANNELS_CTLR(VBATT)),
-#else
-#error "Battery divider node does not exist"
-	.adc = DEVICE_DT_GET(DT_IO_CHANNELS_CTLR(ZEPHYR_USER)),
-#endif
 };
+#endif
 
+#if defined(BATTERY_BACKEND_NPM2100)
+static const struct device *const battery_vbat = DEVICE_DT_GET(NPM2100_VBAT);
+#endif
+
+#if defined(BATTERY_BACKEND_DIVIDER)
 static int divider_setup(void)
 {
 	const struct divider_config *cfg = &divider_config;
@@ -152,12 +156,32 @@ static int divider_setup(void)
 
 	return rc;
 }
+#endif
+
+#if defined(BATTERY_BACKEND_NPM2100)
+static int vbat_setup(void)
+{
+	if (!device_is_ready(battery_vbat)) {
+		LOG_ERR("VBAT sensor is not ready %s", battery_vbat->name);
+		return -ENOENT;
+	}
+
+	LOG_INF("Using nPM2100 VBAT sensor %s", battery_vbat->name);
+	return 0;
+}
+#endif
 
 static bool battery_ok;
 
 static int battery_setup()
 {
-	int rc = divider_setup();
+	int rc;
+
+#if defined(BATTERY_BACKEND_NPM2100)
+	rc = vbat_setup();
+#else
+	rc = divider_setup();
+#endif
 
 	battery_ok = (rc == 0);
 	LOG_INF("Battery setup: %d %d", rc, battery_ok);
@@ -171,12 +195,17 @@ int battery_measure_enable(bool enable)
 	int rc = -ENOENT;
 
 	if (battery_ok) {
-		const struct gpio_dt_spec *gcp = &divider_config.power_gpios;
+		ARG_UNUSED(enable);
 
 		rc = 0;
+
+#if defined(BATTERY_BACKEND_DIVIDER)
+		const struct gpio_dt_spec *gcp = &divider_config.power_gpios;
+
 		if (gcp->port) {
 			rc = gpio_pin_set_dt(gcp, enable);
 		}
+#endif
 	}
 	return rc;
 }
@@ -186,6 +215,19 @@ int battery_sample(void)
 	int rc = -ENOENT;
 
 	if (battery_ok) {
+
+#if defined(BATTERY_BACKEND_NPM2100)
+		struct sensor_value value;
+
+		rc = sensor_sample_fetch(battery_vbat);
+		if (rc == 0) {
+			rc = sensor_channel_get(battery_vbat, SENSOR_CHAN_GAUGE_VOLTAGE, &value);
+		}
+		if (rc == 0) {
+			rc = value.val1 * 1000 + value.val2 / 1000;
+			LOG_INF("VBAT %d mV", rc);
+		}
+#else
 		struct divider_data *ddp = &divider_data;
 		const struct divider_config *dcp = &divider_config;
 		struct adc_sequence *sp = &ddp->adc_seq;
@@ -210,6 +252,7 @@ int battery_sample(void)
 				LOG_INF("raw %u ~ %u mV\n", ddp->raw, val);
 			}
 		}
+#endif
 	}
 
 	return rc;
@@ -256,12 +299,80 @@ static const struct battery_level_point levels[] = {
 	{ 3000, 3650 },
 	{ 500, 3400 },
 	{ 0, 3200 },
+#elif CONFIG_BATTERY_USE_NIMH_MAPPING
+	{ 10000, 1420 },
+	{ 9800, 1380 },
+	{ 9500, 1350 },
+	{ 8800, 1320 },
+	{ 8000, 1300 },
+	{ 7000, 1280 },
+	{ 6000, 1260 },
+	{ 5000, 1240 },
+	{ 3500, 1210 },
+	{ 2000, 1180 },
+	{ 1000, 1120 },
+	{ 0, 1050 },
 #else
 #warning "Battery voltage map not defined"
 	{ 10000, 0},
 	{ 0, 0},
 #endif
 };
+
+int battery_available_min_mV(void)
+{
+#if CONFIG_BATTERY_USE_NIMH_MAPPING
+	return 900;
+#else
+	return 1500;
+#endif
+}
+
+int battery_abnormal_min_mV(void)
+{
+#if CONFIG_BATTERY_USE_NIMH_MAPPING
+	return 500;
+#else
+	return 100;
+#endif
+}
+
+int battery_abnormal_max_mV(void)
+{
+#if CONFIG_BATTERY_USE_NIMH_MAPPING
+	return 2500;
+#else
+	return 6000;
+#endif
+}
+
+bool battery_voltage_plug_detect_enabled(void)
+{
+#if CONFIG_BATTERY_USE_NIMH_MAPPING
+	return false;
+#else
+	return true;
+#endif
+}
+
+bool battery_charge_state_supported(void)
+{
+#if CONFIG_BATTERY_USE_NIMH_MAPPING
+	return false;
+#else
+	return true;
+#endif
+}
+
+int battery_plugged_threshold_mV(void)
+{
+	return 4300;
+}
+
+int battery_unplugged_threshold_mV(void)
+{
+	return 4250;
+}
 
 int read_batt()
 {

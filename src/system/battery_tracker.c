@@ -3,6 +3,7 @@
 
 #include <zephyr/kernel.h>
 
+#include "battery.h"
 #include "battery_tracker.h"
 
 static uint8_t valid_result = 0; // track when data should be recalculated
@@ -306,7 +307,8 @@ int sys_get_battery_mV(void)
 
 int sys_get_valid_battery_mV(void)
 {
-	if (last_unplugged_mV > 1500 && last_unplugged_mV <= 6000)
+	if (last_unplugged_mV > battery_available_min_mV()
+		&& last_unplugged_mV <= battery_abnormal_max_mV())
 		return last_unplugged_mV;
 	return -1;
 }

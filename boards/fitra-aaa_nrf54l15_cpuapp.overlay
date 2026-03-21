@@ -11,7 +11,7 @@
 	 *
 	 * This overlay intentionally relies on the board's *standard* pin mapping
 	 * (Zephyr's fitra-aaa_nrf54l15_cpuapp board DTS) for the buses:
-	 * - I2C: None
+	 * - I2C: P0.02 P0.03 (nPM2100 on I2C30)
 	 * - SPI: P2.6 P2.2 P2.4
 	 *
 	 * Only the required nodes for SlimeVR-Tracker-nRF are added here.
@@ -20,16 +20,6 @@
 	chosen {
 		zephyr,console = &uart20;
 		zephyr,shell-uart = &uart20;
-	};
-
-	battery-divider {
-		compatible = "voltage-divider";
-		status = "okay";
-		/* XIAO nRF54L15 Sense Battery: AIN7 (P1.14) with Power Control (P1.15) */
-		io-channels = <&adc 7>;
-		output-ohms = <1000000>;
-		full-ohms = <2000000>;
-		power-gpios = <&gpio1 15 GPIO_ACTIVE_HIGH>;
 	};
 
 	zephyr,user {
@@ -71,10 +61,15 @@
 	status = "okay";
 };
 
-/* Built-in IMU (LSM6DS3TR-C) on I2C30 */
+/* nPM2100 PMIC and optional built-in IMU on I2C30 */
 &i2c30 {
-	status = "disabled";
-	clock-frequency = <I2C_BITRATE_FAST>;
+	status = "okay";
+	pinctrl-0 = <&i2c30_default>;
+	pinctrl-1 = <&i2c30_sleep>;
+	pinctrl-names = "default", "sleep";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+
+	#include "../npm2100ek_pmic.dtsi"
 
 	lsm6ds3tr_c: lsm6ds3tr-c@6a {
 		compatible = "st,lsm6dsl";

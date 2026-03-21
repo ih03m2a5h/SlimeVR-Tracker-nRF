@@ -214,7 +214,7 @@ static void print_uptime(const uint64_t ticks, const char *name) {
 
 static void print_battery_tracker(void) {
   int adc_mV = sys_get_battery_mV();
-  printk("ADC: %d mV\n", adc_mV);
+  printk("Reading: %d mV\n", adc_mV);
 
   int battery_mV = sys_get_valid_battery_mV();
   int16_t pptt = sys_get_valid_battery_pptt();

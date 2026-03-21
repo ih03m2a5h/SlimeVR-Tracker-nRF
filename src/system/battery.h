@@ -54,4 +54,18 @@ int read_batt(void);
 
 int read_batt_mV(int *out);
 
+int battery_available_min_mV(void);
+
+int battery_abnormal_min_mV(void);
+
+int battery_abnormal_max_mV(void);
+
+bool battery_voltage_plug_detect_enabled(void);
+
+bool battery_charge_state_supported(void);
+
+int battery_plugged_threshold_mV(void);
+
+int battery_unplugged_threshold_mV(void);
+
 #endif /* APPLICATION_BATTERY_H_ */

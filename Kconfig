@@ -32,6 +32,13 @@ config BATTERY_USE_REG_LDO_MAPPING
       Use a constant current mapping for battery voltage.
       Preferred for systems with a linear regulator.
 
+config BATTERY_USE_NIMH_MAPPING
+        bool "Use 1-cell NiMH mapping"
+        help
+            Use a voltage curve tuned for a single NiMH cell.
+            This is intended for primary battery monitoring paths that
+            report cell voltage directly, such as nPM2100 VBAT.
+
 config BATTERY_NO_MAPPING
     bool "Disable battery voltage mapping"
     help
