@@ -1,0 +1,69 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "fitra: build",
+      "type": "shell",
+      "command": "west",
+      "args": [
+        "build",
+        "-d",
+        "build_fitra_aaa",
+        "--",
+        "-DBOARD_ROOT=${workspaceFolder}"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "fitra: flash (pyocd)",
+      "type": "shell",
+      "command": "~/.local/share/mise/installs/python/3/bin/pyocd",
+      "args": [
+        "flash",
+        "-e",
+        "sector",
+        "-t",
+        "nrf54l",
+        "-u",
+        "E6647C7403168830",
+        "build_fitra_aaa/merged.hex"
+      ],
+      "dependsOn": [
+        "fitra: build"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "fitra: rtt attach (pyocd)",
+      "type": "shell",
+      "command": "~/.local/share/mise/installs/python/3/bin/pyocd",
+      "args": [
+        "rtt",
+        "-t",
+        "nrf54l",
+        "-u",
+        "E6647C7403168830",
+        "-M",
+        "attach"
+      ],
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "fitra: flash + rtt",
+      "type": "shell",
+      "command": "echo",
+      "args": [
+        "Starting fitra flash + RTT workflow"
+      ],
+      "dependsOn": [
+        "fitra: flash (pyocd)",
+        "fitra: rtt attach (pyocd)"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    }
+  ]
+}
