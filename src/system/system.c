@@ -24,6 +24,7 @@ LOG_MODULE_REGISTER(system, LOG_LEVEL_INF);
 
 #if DT_NODE_HAS_PROP(DT_ALIAS(sw0), gpios) // Alternate button if available to use as "reset key"
 #define BUTTON_EXISTS true
+static const struct gpio_dt_spec button0 = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
 static void button_thread(void);
 K_THREAD_DEFINE(button_thread_id, 256, button_thread, NULL, NULL, NULL, BUTTON_THREAD_PRIORITY, 0, 0);
 #else
@@ -105,6 +106,8 @@ void configure_sense_pins(void)
 	}
 	// Configure sw0 sense
 #if BUTTON_EXISTS // Alternate button if available to use as "reset key"
+	gpio_pin_configure_dt(&button0, GPIO_INPUT);
+	gpio_pin_interrupt_configure_dt(&button0, GPIO_INT_LEVEL_ACTIVE);
 	nrf_gpio_cfg_input(NRF_DT_GPIOS_TO_PSEL(DT_ALIAS(sw0), gpios), NRF_GPIO_PIN_PULLUP);
 	nrf_gpio_cfg_sense_set(NRF_DT_GPIOS_TO_PSEL(DT_ALIAS(sw0), gpios), NRF_GPIO_PIN_SENSE_LOW);
 	LOG_INF("Configured sw0 sense");
@@ -278,7 +281,6 @@ int set_sensor_clock(bool enable, float rate, float *actual_rate)
 }
 
 #if BUTTON_EXISTS // Alternate button if available to use as "reset key"
-static const struct gpio_dt_spec button0 = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
 static int64_t press_time = 0;
 static int64_t last_press_duration = 0;
 

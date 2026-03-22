@@ -45,11 +45,15 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 int main(void)
 {
 #ifdef NRF_RESET
-	bool reset_pin_reset = NRF_RESET->RESETREAS & RESET_RESETREAS_RESETPIN_Msk;
-	NRF_RESET->RESETREAS = NRF_RESET->RESETREAS; // Clear RESETREAS
+	uint32_t resetreas = NRF_RESET->RESETREAS;
+	bool reset_pin_reset = resetreas & RESET_RESETREAS_RESETPIN_Msk;
+	bool system_off_reset = resetreas & RESET_RESETREAS_OFF_Msk;
+	NRF_RESET->RESETREAS = resetreas; // Clear RESETREAS
 #else
-	bool reset_pin_reset = NRF_POWER->RESETREAS & POWER_RESETREAS_RESETPIN_Msk;
-	NRF_POWER->RESETREAS = NRF_POWER->RESETREAS; // Clear RESETREAS
+	uint32_t resetreas = NRF_POWER->RESETREAS;
+	bool reset_pin_reset = resetreas & POWER_RESETREAS_RESETPIN_Msk;
+	bool system_off_reset = resetreas & POWER_RESETREAS_OFF_Msk;
+	NRF_POWER->RESETREAS = resetreas; // Clear RESETREAS
 #endif
 
 #if BUTTON_EXISTS
@@ -59,8 +63,9 @@ int main(void)
 
 	set_led(SYS_LED_PATTERN_ONESHOT_WAKE, SYS_LED_PRIORITY_BOOT); // Boot LED
 
+	bool button_pressed = button_read();
 	uint8_t reboot_counter = reboot_counter_read();
-	bool booting_from_shutdown = !reboot_counter && (reset_pin_reset || button_read()); // 0 means from user shutdown or failed ram validation
+	bool booting_from_shutdown = !reboot_counter && (system_off_reset || reset_pin_reset || button_pressed); // 0 means from user shutdown or failed ram validation
 
 	/* if button is not held after booting from shutdown, power off again
 	 * if button press is normal, continue boot
@@ -116,7 +121,7 @@ int main(void)
 		k_msleep(1000); // Wait before clearing counter and continuing
 	}
 	reboot_counter_write(100);
-	if (!reset_pin_reset && reset_mode == 0) // Only need to check once, if the button is pressed again an interrupt is triggered from before
+	if (!(reset_pin_reset || system_off_reset) && reset_mode == 0) // Only need to check once, if the button is pressed again an interrupt is triggered from before
 		reset_mode = -1; // Cancel reset_mode (shutdown)
 
 	if (CONFIG_0_SETTINGS_READ(CONFIG_0_USER_SHUTDOWN))

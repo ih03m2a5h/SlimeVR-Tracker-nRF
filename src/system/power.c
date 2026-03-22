@@ -92,13 +92,19 @@ static void sys_disconnect_interface_pins(void)
 	// interface pins are disconnected according to devicetree, so only need to disconnect any cs pins
 	// int pin already configured by power off
 #if DT_SPI_DEV_HAS_CS_GPIOS(DT_NODELABEL(imu_spi))
-	uint32_t imu_cs_gpios = DT_SPI_DEV_CS_GPIOS_PIN(DT_NODELABEL(imu_spi));
+	uint32_t imu_cs_gpios = DT_GPIO_PIN_BY_IDX(DT_BUS(DT_NODELABEL(imu_spi)),
+		cs_gpios, DT_REG_ADDR_RAW(DT_NODELABEL(imu_spi)))
+		+ 32 * DT_PROP(DT_GPIO_CTLR_BY_IDX(DT_BUS(DT_NODELABEL(imu_spi)),
+		cs_gpios, DT_REG_ADDR_RAW(DT_NODELABEL(imu_spi))), port);
 	LOG_INF("IMU CS GPIO pin: %u", imu_cs_gpios);
 	nrf_gpio_cfg_default(imu_cs_gpios);
 	LOG_INF("Disconnected IMU CS GPIO");
 #endif
 #if DT_SPI_DEV_HAS_CS_GPIOS(DT_NODELABEL(mag_spi))
-	uint32_t mag_cs_gpios = DT_SPI_DEV_CS_GPIOS_PIN(DT_NODELABEL(mag_spi)));
+	uint32_t mag_cs_gpios = DT_GPIO_PIN_BY_IDX(DT_BUS(DT_NODELABEL(mag_spi)),
+		cs_gpios, DT_REG_ADDR_RAW(DT_NODELABEL(mag_spi)))
+		+ 32 * DT_PROP(DT_GPIO_CTLR_BY_IDX(DT_BUS(DT_NODELABEL(mag_spi)),
+		cs_gpios, DT_REG_ADDR_RAW(DT_NODELABEL(mag_spi))), port);
 	LOG_INF("Magnetometer CS GPIO pin: %u", mag_cs_gpios);
 	nrf_gpio_cfg_default(mag_cs_gpios);
 	LOG_INF("Disconnected Magnetometer CS GPIO");
