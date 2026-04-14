@@ -10,17 +10,26 @@
 #include <zephyr/drivers/flash.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/fs/nvs.h>
+#include <zephyr/drivers/sensor.h>
 #include <hal/nrf_gpio.h>
 
 #include "system.h"
 
+static const struct device *const temp_dev = DEVICE_DT_GET_ANY(nordic_nrf_temp);
+static struct sensor_value temp;
+static int64_t last_temp_time = -1000;
+
 static struct nvs_fs fs;
 
-#define NVS_PARTITION		storage_partition
-#define NVS_PARTITION_DEVICE	FIXED_PARTITION_DEVICE(NVS_PARTITION)
-#define NVS_PARTITION_OFFSET	FIXED_PARTITION_OFFSET(NVS_PARTITION)
+#define NVS_PARTITION storage_partition
+#define NVS_PARTITION_DEVICE FIXED_PARTITION_DEVICE(NVS_PARTITION)
+#define NVS_PARTITION_OFFSET FIXED_PARTITION_OFFSET(NVS_PARTITION)
+#define NVS_PARTITION_SIZE FIXED_PARTITION_SIZE(NVS_PARTITION)
 
 LOG_MODULE_REGISTER(system, LOG_LEVEL_INF);
+
+static void temp_thread(void);
+K_THREAD_DEFINE(temp_thread_id, 256, temp_thread, NULL, NULL, NULL, TEMP_THREAD_PRIORITY, 0, 0);
 
 #if DT_NODE_HAS_PROP(DT_ALIAS(sw0), gpios) // Alternate button if available to use as "reset key"
 #define BUTTON_EXISTS true
@@ -80,6 +89,15 @@ static const struct gpio_dt_spec ldo_en = GPIO_DT_SPEC_GET(ZEPHYR_USER_NODE, ldo
 #if NRF5_BOOTLOADER
 static const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 #endif
+
+int sys_get_die_temperature(float *ptr)
+{
+	if (k_uptime_get() - last_temp_time > 1000)
+		return -1;
+	sensor_channel_get(temp_dev, SENSOR_CHAN_DIE_TEMP, &temp);
+	*ptr = sensor_value_to_float(&temp);
+	return 0;
+}
 
 void configure_sense_pins(void)
 {
@@ -254,7 +272,7 @@ void sys_clear(void)
 	static bool reset_confirm = false;
 	if (!reset_confirm)
 	{
-		printk("Resetting NVS and retained will clear all pairing, sensor calibration data, and battery calibration data. Are you sure?\n");
+		printk("Resetting NVS and retained will clear all pairing, sensor calibration data, and battery calibration data. Please resend the command to confirm.\n");
 		reset_confirm = true;
 		return;
 	}
@@ -263,9 +281,19 @@ void sys_clear(void)
 	sys_nvs_init();
 	memset(retained, 0, sizeof(*retained));
 	nvs_clear(&fs);
+	config_settings_init();
+	retained_update();
 	nvs_init = false;
 	reset_confirm = false;
 	LOG_INF("NVS and retained reset");
+}
+
+void sys_nvs_stats(void)
+{
+	sys_nvs_init();
+	printk("Storage partition: %u bytes\n", NVS_PARTITION_SIZE);
+	printk("Allocated NVS: %u * %u = %u bytes\n", fs.sector_size, fs.sector_count, fs.sector_size * fs.sector_count);
+	printk("NVS free: %d bytes, max: %d bytes\n", nvs_calc_free_space(&fs), nvs_sector_max_data_size(&fs));
 }
 
 // return 0 if clock applied, -1 if failed (because there is no clk_en or clk_out)
@@ -336,21 +364,19 @@ static void button_thread(void)
 		{
 			if (!get_status(SYS_STATUS_BUTTON_PRESSED))
 				set_status(SYS_STATUS_BUTTON_PRESSED, true);
-			set_led(SYS_LED_PATTERN_ON, SYS_LED_PRIORITY_USER);
 		}
 		if (last_press_duration > 50) // debounce
 		{
 			if (!get_status(SYS_STATUS_BUTTON_PRESSED))
 				set_status(SYS_STATUS_BUTTON_PRESSED, true);
-			if (num_presses == 0 && !CONFIG_0_SETTINGS_READ(CONFIG_0_USER_EXTRA_ACTIONS))
-				connection_update_button(1);
 			num_presses++;
+			if (!CONFIG_0_SETTINGS_READ(CONFIG_0_USER_EXTRA_ACTIONS))
+				connection_update_button(num_presses);
 			LOG_INF("Button pressed %d times", num_presses);
 			last_press_duration = 0;
 			last_press = k_uptime_get();
-			set_led(SYS_LED_PATTERN_ON, SYS_LED_PRIORITY_USER);
 		}
-		if (last_press && k_uptime_get() - last_press > 1000)
+		if (last_press && k_uptime_get() - last_press > 400)
 		{
 			LOG_INF("Button was pressed %d times", num_presses);
 			last_press = 0;
@@ -358,13 +384,14 @@ static void button_thread(void)
 //				sys_request_system_reboot(false);
 			if (CONFIG_0_SETTINGS_READ(CONFIG_0_USER_EXTRA_ACTIONS)) // TODO: extra actions are default until server can send commands to trackers
 				sys_reset_mode(num_presses - 1);
+			else
+				connection_update_button(MIN(num_presses, 2)); // only single or double press
 			num_presses = 0;
-			set_led(SYS_LED_PATTERN_OFF, SYS_LED_PRIORITY_USER);
 			set_status(SYS_STATUS_BUTTON_PRESSED, false);
 		}
 		if (press_time && k_uptime_get() - press_time > 1000 && button_read()) // Button is being held
 		{
-			if (sys_user_shutdown()) // held for 5 seconds, reset pairing
+			if (sys_user_shutdown()) // held for 1 second, reset pairing
 			{
 				LOG_INF("Pairing requested");
 				esb_reset_pair();
@@ -436,40 +463,24 @@ bool stby_read(void)
 int sys_user_shutdown(void)
 {
 	int64_t start_time = k_uptime_get();
-	bool use_shutdown = CONFIG_0_SETTINGS_READ(CONFIG_0_USER_SHUTDOWN);
-	set_led(SYS_LED_PATTERN_OFF_FORCE, SYS_LED_PRIORITY_USER);
-	bool led_on = false;
+	if (!CONFIG_0_SETTINGS_READ(CONFIG_0_USER_SHUTDOWN)) // return if shutdown isn't enabled
+		return 1;
+	connection_set_shutdown(); // propogate shutdown
+	set_led(SYS_LED_PATTERN_ONESHOT_POWEROFF, SYS_LED_PRIORITY_USER);
 	while (button_read()) // If alternate button is available and still pressed, wait for the user to stop pressing the button
+		k_msleep(1);
+	LOG_INF("User shutdown requested");
+	reboot_counter_write(0); // shutdown flag
+	while (!button_read()) // waiting for pattern, if button is pressed again break and reboot immedately
 	{
-		if (!led_on && k_uptime_get() - start_time > 500) // long pattern starts with led on, so delay pattern a bit
+		if (k_uptime_get() - start_time > 650) // length of pattern elapsed
 		{
-			set_led(SYS_LED_PATTERN_LONG, SYS_LED_PRIORITY_USER);
-			led_on = 1;
-		}
-		if (k_uptime_get() - start_time > 4000) // held for over 5 seconds, cancel shutdown
-		{
-			set_led(SYS_LED_PATTERN_OFF, SYS_LED_PRIORITY_USER);
-			return 1;
+			sys_request_system_silent_off(false); // pattern already played
+			return 0;
 		}
 		k_msleep(1);
 	}
-	if (use_shutdown)
-	{
-		start_time = k_uptime_get();
-		LOG_INF("User shutdown requested");
-		set_led(SYS_LED_PATTERN_ONESHOT_POWEROFF, SYS_LED_PRIORITY_USER);
-		reboot_counter_write(0); // shutdown flag
-		while (!button_read()) // waiting for pattern, if button is pressed again reboot immedately
-		{
-			if (k_uptime_get() - start_time > 1250) // length of pattern elapsed
-			{
-				sys_request_system_off(false);
-				return 0;
-			}
-			k_msleep(1);
-		}
-	}
-	set_led(SYS_LED_PATTERN_OFF_FORCE, SYS_LED_PRIORITY_USER);
+	set_led(SYS_LED_PATTERN_OFF_FORCE, SYS_LED_PRIORITY_USER); // pattern not done, force off
 	sys_request_system_reboot(false);
 	return 0;
 }
@@ -503,5 +514,17 @@ void sys_reset_mode(uint8_t mode)
 #endif
 	default:
 		break;
+	}
+}
+
+static void temp_thread(void)
+{
+	while (1)
+	{
+		if (sensor_sample_fetch(temp_dev))
+			LOG_ERR("Failed to fetch sample from nRF temperature device\n");
+		else
+			last_temp_time = k_uptime_get();
+		k_msleep(500);
 	}
 }

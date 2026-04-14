@@ -80,15 +80,15 @@ static float q3[4] = {SENSOR_QUATERNION_CORRECTION}; // correction quaternion
 
 static float last_lin_a[3] = {0}; // vector to hold last linear accelerometer
 
+static float last_m[3] = {0};
+static int64_t last_mag_time = -1000;
+static int64_t mag_interval = 0;
+
 static float temp; // sensor temperature
 static int64_t last_temp_time = -1000;
 
 static int64_t last_suspend_attempt_time = 0;
 static int64_t last_data_time;
-
-static float max_gyro_speed_square;
-static bool mag_use_oneshot;
-static bool mag_skip_oneshot;
 
 static float accel_actual_time;
 static float gyro_actual_time;
@@ -171,6 +171,7 @@ int sensor_get_sensor_temperature(float *ptr)
 {
 	if (sensor_imu == &sensor_imu_none || (k_uptime_get() - last_temp_time > 1000))
 	{
+		*ptr = 25.0f; // fallback
 		if (get_status(SYS_STATUS_SENSOR_ERROR))
 			return -2; // no imu!
 		else
@@ -382,7 +383,7 @@ int sensor_request_scan(bool force)
 		return 0; // already initialized
 	main_imu_suspend();
 	k_thread_abort(&sensor_thread_id); // stop the sensor thread // TODO: may need to handle fusion state
-	LOG_INF("Aborted sensor thread");
+	LOG_INF("Stopped sensor thread");
 	main_suspended = false;
 	sensor_sensor_init = false;
 	if (force)
@@ -532,7 +533,7 @@ static void set_update_time_ms(int time_ms)
 #if IMU_INT_EXISTS
 	float fifo_threshold = time_ms / 1000.0f / sensor_actual_time; // target loop rate
 	sensor_fifo_threshold = fifo_threshold;
-	LOG_INF("FIFO THS/WM/WTM: %.2f -> %d", (double)fifo_threshold, sensor_fifo_threshold);
+	LOG_DBG("FIFO THS/WM/WTM: %.2f -> %d", (double)fifo_threshold, sensor_fifo_threshold);
 	sensor_imu->setup_DRDY(sensor_fifo_threshold); // do not need to reset pin config
 #endif
 	sensor_update_time_ms = time_ms; // TODO: terrible naming
@@ -622,6 +623,21 @@ static void sensor_update_sensor_state(void)
 			sys_request_WOM(false, false);
 			sensor_timeout = SENSOR_SENSOR_TIMEOUT_IMU_ELAPSED; // only try to suspend once
 		}
+		// Update timeout estimate
+		switch (sensor_timeout)
+		{
+		case SENSOR_SENSOR_TIMEOUT_ACTIVITY:
+			connection_update_sensor_timeout_time(CONFIG_3_SETTINGS_READ(CONFIG_3_ACTIVE_TIMEOUT_DELAY) - last_data_delta);
+			break;
+		case SENSOR_SENSOR_TIMEOUT_IMU:
+			if (CONFIG_1_SETTINGS_READ(CONFIG_1_USE_IMU_TIMEOUT) && CONFIG_0_SETTINGS_READ(CONFIG_0_USE_IMU_WAKE_UP))
+			{
+				connection_update_sensor_timeout_time(imu_timeout - last_data_delta);
+				break;
+			}
+		default:
+			connection_update_sensor_timeout_time(INT64_MAX);
+		}
 	}
 	else
 	{
@@ -631,6 +647,7 @@ static void sensor_update_sensor_state(void)
 		if (sensor_timeout == SENSOR_SENSOR_TIMEOUT_IMU_ELAPSED) // Resetting IMU timeout
 			sensor_timeout = SENSOR_SENSOR_TIMEOUT_IMU;
 		sensor_mode = SENSOR_SENSOR_MODE_LOW_NOISE;
+		connection_update_sensor_timeout_time(INT64_MAX);
 	}
 }
 
@@ -663,9 +680,9 @@ int sensor_init(void)
 	mag_enabled = CONFIG_1_SETTINGS_READ(CONFIG_1_SENSOR_USE_MAG);
 
 	// setup sensor, set ODR
-	float accel_initial_time = 1.0 / CONFIG_2_SETTINGS_READ(CONFIG_2_SENSOR_ACCEL_ODR); // configure with ~1000Hz ODR
-	float gyro_initial_time = 1.0 / CONFIG_2_SETTINGS_READ(CONFIG_2_SENSOR_GYRO_ODR); // configure with ~1000Hz ODR
-	float mag_initial_time = sensor_update_time_ms / 1000.0; // configure with ~200Hz ODR
+	float accel_initial_time = 1.0 / CONFIG_2_SETTINGS_READ(CONFIG_2_SENSOR_ACCEL_ODR);
+	float gyro_initial_time = 1.0 / CONFIG_2_SETTINGS_READ(CONFIG_2_SENSOR_GYRO_ODR);
+	float mag_initial_time = 0.1; // configure with 10Hz ODR
 	err = sensor_imu->init(clock_actual_rate, accel_initial_time, gyro_initial_time, &accel_actual_time, &gyro_actual_time);
 	sensor_actual_time = MIN(accel_actual_time, gyro_actual_time);
 #if SENSOR_IMU_SPI_EXISTS
@@ -680,7 +697,8 @@ int sensor_init(void)
 	{
 		// TODO: need to flag passthrough enabled
 //			sensor_imu->ext_passthrough(true); // reenable passthrough
-		err = sensor_mag->init(mag_initial_time, &mag_actual_time); // configure with ~200Hz ODR
+		err = sensor_mag->init(mag_initial_time, &mag_actual_time);
+		mag_interval = mag_actual_time * 0.9f * 1000; // start attemping magnetometer reads before expected new sample
 #if SENSOR_MAG_SPI_EXISTS
 		LOG_INF("Requested SPI frequency: %.2fMHz", (double)sensor_mag_spi_dev.config.frequency / 1000000.0);
 #endif
@@ -707,7 +725,7 @@ int sensor_init(void)
 	}
 	else
 	{
-		sensor_fusion->init(gyro_actual_time, accel_actual_time, mag_initial_time); // TODO: using initial time since mag are not polled at the actual rate
+		sensor_fusion->init(gyro_actual_time, accel_actual_time, mag_actual_time);
 	}
 
 	sensor_calibration_update_sensor_ids(sensor_imu_id);
@@ -721,12 +739,12 @@ int sensor_init(void)
 	// Setup interrupt
 	float fifo_threshold = sensor_update_time_ms / 1000.0f / sensor_actual_time; // target loop rate
 	sensor_fifo_threshold = fifo_threshold;
-	LOG_INF("FIFO THS/WM/WTM: %.2f -> %d", (double)fifo_threshold, sensor_fifo_threshold);
+	LOG_DBG("FIFO THS/WM/WTM: %.2f -> %d", (double)fifo_threshold, sensor_fifo_threshold);
 	uint8_t pin_config = sensor_imu->setup_DRDY(sensor_fifo_threshold);
 	if (pin_config == 0)
 		return -1;
 	uint32_t int0_gpios = NRF_DT_GPIOS_TO_PSEL(ZEPHYR_USER_NODE, int0_gpios);
-	LOG_INF("FIFO THS/WM/WTM GPIO pin: %u, config: %u", int0_gpios, pin_config);
+	LOG_DBG("FIFO THS/WM/WTM GPIO pin: %u, config: %u", int0_gpios, pin_config);
 	uint32_t pull_flags = ((pin_config >> 4) == NRF_GPIO_PIN_PULLDOWN ? GPIO_PULL_DOWN : 0) | ((pin_config >> 4) == NRF_GPIO_PIN_PULLUP ? GPIO_PULL_UP : 0);
 	gpio_pin_configure_dt(&int0, GPIO_INPUT | pull_flags);
 	uint32_t int_flags = ((pin_config & 0xF) == NRF_GPIO_PIN_SENSE_LOW ? GPIO_INT_EDGE_FALLING : 0) | ((pin_config & 0xF) == NRF_GPIO_PIN_SENSE_HIGH ? GPIO_INT_EDGE_RISING : 0);
@@ -761,6 +779,7 @@ static uint64_t total_read_packets = 0;
 static uint64_t total_processed_packets = 0;
 static uint64_t total_gyro_samples = 0;
 static uint64_t total_accel_samples = 0;
+static uint64_t total_mag_samples = 0;
 static uint64_t total_loop_time = 0;
 static uint64_t total_loop_iterations = 0;
 #endif
@@ -798,11 +817,6 @@ void sensor_loop(void)
 			// Fusing data will take between 100us (~7 samples, low noise) - 500us (~33 samples, low power) for xiofusion
 			// TODO: on any errors set main_ok false and skip (make functions return nonzero)
 
-			// At high speed, use oneshot mode to have synced magnetometer data
-			// Call before FIFO and get the data after
-			if (mag_available && mag_enabled && mag_use_oneshot)
-				sensor_mag->mag_oneshot();
-
 			// Read IMU temperature
 			err = sensor_imu->temp_read(&temp); // TODO: use as calibration data
 			if (!err)
@@ -836,13 +850,18 @@ void sensor_loop(void)
 
 			// Read magnetometer
 			float raw_m[3];
-			if (mag_available && mag_enabled)
+			bool mag_read = false;
+			if (mag_available && mag_enabled && (k_uptime_get() - last_mag_time > mag_interval)) // some magnetometer do not have int pin // TODO: implement for magnetometer that does, or read status byte
+			{
+				mag_read = true;
 				sensor_mag->mag_read(raw_m); // reading mag last, and it will be processed last
+			}
+
+			int16_t last_sensor_fifo_threshold = sensor_fifo_threshold;
 
 			if (reconfig) // TODO: get rid of reconfig?
 			{
 				// Changing FIFO threshold here should be fine since FIFO is empty now
-				// TODO: causing warnings since packet processing and loop timing still expects previous update_time
 				switch (sensor_mode)
 				{
 				case SENSOR_SENSOR_MODE_LOW_NOISE:
@@ -867,7 +886,6 @@ void sensor_loop(void)
 			int g_count = 0;
 			float a_sum[3] = {0};
 			int a_count = 0;
-			max_gyro_speed_square = 0;
 			int processed_packets = 0;
 			for (uint16_t i = 0; i < packets; i++)
 			{
@@ -901,11 +919,6 @@ void sensor_loop(void)
 						sensor_fusion->get_gyro_bias(g_off);
 						for (int i = 0; i < 3; i++)
 							g_off[i] = g[i] - g_off[i];
-
-						// Get the highest gyro speed
-						float gyro_speed_square = g_off[0] * g_off[0] + g_off[1] * g_off[1] + g_off[2] * g_off[2];
-						if (gyro_speed_square > max_gyro_speed_square)
-							max_gyro_speed_square = gyro_speed_square;
 					}
 				}
 
@@ -943,16 +956,19 @@ void sensor_loop(void)
 				total_processed_packets += processed_packets;
 #endif
 
-			if (mag_available && mag_enabled)
+			if (mag_available && mag_enabled && mag_read && memcmp(raw_m, last_m, sizeof(last_m))) // check data has changed from last acquisition
 			{
+#if DEBUG
+				total_mag_samples++;
+#endif
+				last_mag_time = k_uptime_get();
 				bool mag_calibrated = true;
-				float uncalibrated_m[3] = {0};
-				memcpy(uncalibrated_m, raw_m, sizeof(uncalibrated_m)); // copy raw magnetometer data
+				memcpy(last_m, raw_m, sizeof(last_m)); // copy raw magnetometer data
 				sensor_calibration_process_mag(raw_m);
 				float zero_m[3] = {0};
 				if (v_epsilon(raw_m, zero_m, 1e-6)) // if the magnetometer is not calibrated, skip and send raw data
 				{
-					memcpy(raw_m, uncalibrated_m, sizeof(uncalibrated_m));
+					memcpy(raw_m, last_m, sizeof(last_m));
 					mag_calibrated = false;
 				}
 				float mx = raw_m[0];
@@ -962,7 +978,7 @@ void sensor_loop(void)
 
 				// Process fusion
 				if (mag_calibrated)
-					sensor_fusion->update_mag(m, sensor_update_time_ms / 1000.0); // TODO: use actual time?
+					sensor_fusion->update_mag(m, mag_actual_time);
 
 				v_rotate(m, q3, m); // magnetic field in local device frame, no other transformation will be done
 				connection_update_sensor_mag(m);
@@ -1000,8 +1016,8 @@ void sensor_loop(void)
 			}
 
 			// Also check if expected number of timesteps when using FIFO threshold, if FIFO threshold is being used
-			if (sensor_fifo_threshold && processed_timesteps && processed_timesteps != sensor_fifo_threshold)
-				LOG_WRN("Expected %d timestep%s, got %d", sensor_fifo_threshold, sensor_fifo_threshold == 1 ? "" : "s", processed_timesteps);
+			if (last_sensor_fifo_threshold && processed_timesteps && processed_timesteps != last_sensor_fifo_threshold)
+				LOG_WRN("Expected %d timestep%s, got %d", last_sensor_fifo_threshold, last_sensor_fifo_threshold == 1 ? "" : "s", processed_timesteps);
 
 			// Update fusion gyro sanity? // TODO: use to detect drift and correct or suspend tracking
 //			sensor_fusion->update_gyro_sanity(g, m);
@@ -1016,43 +1032,6 @@ void sensor_loop(void)
 				a_to_lin_a(q, a, lin_a);
 
 			sensor_update_sensor_state();
-
-			// Update magnetometer mode
-			if (mag_available && mag_enabled)
-			{
-				// TODO: magnetometer might be better to limit to a lower (fixed) rate
-				float gyro_speed = sqrtf(max_gyro_speed_square);
-				float mag_target_time = 1.0f / (4 * gyro_speed); // target mag ODR for ~0.25 deg error
-				if (mag_target_time < 0.005f && mag_skip_oneshot) // only use continuous modes if oneshot is not available
-					mag_target_time = 0.005;
-				if (mag_target_time > 0.1f) // limit to 0.1 (minimum 10Hz)
-					mag_target_time = 0.1;
-				sys_interface_resume();
-				if (mag_target_time < 0.005f) // cap at 0.005 (200Hz), above this the sensor will use oneshot mode instead
-				{
-					int err = sensor_mag->update_odr(INFINITY, &mag_actual_time);
-					if (mag_actual_time == INFINITY)
-					{
-						if (!err)
-							LOG_DBG("Switching magnetometer to oneshot");
-						mag_use_oneshot = true;
-					}
-					else // magnetometer did not have a oneshot mode, try 200Hz
-					{
-						if (!err)
-							mag_skip_oneshot = true;
-						mag_target_time = 0.005;
-					}
-				}
-				if (mag_target_time >= 0.005f || mag_actual_time != INFINITY) // under 200Hz or magnetometer did not have a oneshot mode
-				{
-					int err = sensor_mag->update_odr(mag_target_time, &mag_actual_time);
-					if (!err)
-						LOG_DBG("Switching magnetometer ODR to %.2fHz", 1.0 / (double)mag_actual_time);
-					mag_use_oneshot = false;
-				}
-				sys_interface_suspend();
-			}
 
 			// Update orientation
 			bool send_quat_data = !q_epsilon(q, last_q, 0.001);
@@ -1091,13 +1070,13 @@ void sensor_loop(void)
 			last_status_time = k_uptime_get();
 			if (max_loop_time > 0)
 			{
-				LOG_WRN("Last update steps took up to %lld ms", time_delta);
+				LOG_WRN("Last update steps took up to %lld ms", max_loop_time);
 				max_loop_time = 0;
 			}
 #if DEBUG
-			LOG_DBG("loop iterations: %llu, packets read: %llu, processed: %llu, gyro samples: %llu, accel samples: %llu, total acquisition time: %lld us, total loop time: %lld us", total_loop_iterations, total_read_packets, total_processed_packets, total_gyro_samples, total_accel_samples, k_ticks_to_us_near64(total_acquisition_time), k_ticks_to_us_near64(total_loop_time));
+			LOG_DBG("loop iterations: %llu, packets read: %llu, processed: %llu, gyro samples: %llu, accel samples: %llu, mag samples: %llu, total acquisition time: %lld us, total loop time: %lld us", total_loop_iterations, total_read_packets, total_processed_packets, total_gyro_samples, total_accel_samples, total_mag_samples, k_ticks_to_us_near64(total_acquisition_time), k_ticks_to_us_near64(total_loop_time));
 			LOG_DBG("sensor loop rate: %.2fHz, processing time: %.2f/%.2f us -> %.2f%%", (double)total_loop_iterations / (double)k_ticks_to_us_near64(total_acquisition_time) * 1000000.0, (double)k_ticks_to_us_near64(total_loop_time) / (double)total_loop_iterations, (double)k_ticks_to_us_near64(total_acquisition_time) / (double)total_loop_iterations, (double)total_loop_time / (double)total_acquisition_time * 100.0);
-			LOG_DBG("reported gyro rate: %.2fHz, actual: %.2fHz, reported accel rate: %.2fHz, actual: %.2fHz", 1.0 / (double)gyro_actual_time, (double)total_gyro_samples / (double)k_ticks_to_us_near64(total_acquisition_time) * 1000000.0, 1.0 / (double)accel_actual_time, (double)total_accel_samples / (double)k_ticks_to_us_near64(total_acquisition_time) * 1000000.0);
+			LOG_DBG("reported gyro rate: %.2fHz, actual: %.2fHz, reported accel rate: %.2fHz, actual: %.2fHz, reported mag rate: %.2fHz, actual: %.2fHz", 1.0 / (double)gyro_actual_time, (double)total_gyro_samples / (double)k_ticks_to_us_near64(total_acquisition_time) * 1000000.0, 1.0 / (double)accel_actual_time, (double)total_accel_samples / (double)k_ticks_to_us_near64(total_acquisition_time) * 1000000.0, 1.0 / (double)mag_actual_time, (double)total_mag_samples / (double)k_ticks_to_us_near64(total_acquisition_time) * 1000000.0);
 #endif
 		}
 
@@ -1113,9 +1092,9 @@ void sensor_loop(void)
 				main_wfi = false;
 			}
 		}
-		else // if signal was sent during processing, loop immediately to catch up
+		else // if signal was sent during processing, loop immediately to catch up (I2C could cause this to happen constantly)
 		{
-			LOG_INF("FIFO THS/WM/WTM triggered during loop");
+			LOG_DBG("FIFO THS/WM/WTM triggered during loop");
 			k_yield();
 			main_wfi = false;
 		}

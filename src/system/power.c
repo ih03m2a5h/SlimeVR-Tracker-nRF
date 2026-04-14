@@ -29,7 +29,7 @@ enum sys_regulator {
 #define BATTERY_SAMPLES 24
 
 static int16_t calibrated_battery_pptt = -1;
-static int16_t current_battery_pptt = -1;
+static int16_t current_battery_pptt = INT16_MIN;
 static int32_t hysteresis_pptt = -1;
 static int32_t average_pptt = -1;
 static int16_t last_pptt[BATTERY_SAMPLES - 1] = {[0 ... BATTERY_SAMPLES - 2] = -1};
@@ -48,7 +48,7 @@ static int64_t last_valid_temp = -1;
 LOG_MODULE_REGISTER(power, LOG_LEVEL_INF);
 
 static void sys_WOM(bool force);
-static void sys_system_off(void);
+static void sys_system_off(bool silent);
 static void sys_system_reboot(void);
 
 static int sys_power_state_request(int id);
@@ -263,7 +263,7 @@ void sys_request_system_off(bool immediate)
 {
 	if (immediate)
 	{
-		sys_system_off();
+		sys_system_off(false);
 		return;
 	}
 	sys_power_state_request(3);
@@ -277,6 +277,16 @@ void sys_request_system_reboot(bool immediate)
 		return;
 	}
 	sys_power_state_request(4);
+}
+
+void sys_request_system_silent_off(bool immediate)
+{
+	if (immediate)
+	{
+		sys_system_off(true);
+		return;
+	}
+	sys_power_state_request(5);
 }
 
 static void sys_WOM(bool force) // TODO: if IMU interrupt does not exist what does the system do?
@@ -325,10 +335,13 @@ static void sys_WOM(bool force) // TODO: if IMU interrupt does not exist what do
 #endif
 }
 
-static void sys_system_off(void) // TODO: add timeout
+static void sys_system_off(bool silent) // TODO: add timeout
 {
 	LOG_INF("System off requested");
 	configure_system_off(); // Common subsystem shutdown and prepare sense pins
+	int64_t start_time = k_uptime_get();
+	if (!silent) // indicate shutdown is happening
+		set_led(SYS_LED_PATTERN_ONESHOT_POWEROFF, SYS_LED_PRIORITY_HIGHEST);
 	// Clear sensor addresses
 	sensor_scan_clear();
 	LOG_INF("Requested sensor scan on next boot");
@@ -347,7 +360,16 @@ static void sys_system_off(void) // TODO: add timeout
 	LOG_INF("Powering off nRF");
 	sys_update_battery_tracker(current_battery_pptt, device_plugged);
 //	retained_update();
-	wait_for_logging();
+	if (!silent)
+	{
+		while (k_uptime_get() - start_time < 650) // wait for pattern to complete
+			k_msleep(1);
+		set_led(SYS_LED_PATTERN_OFF_FORCE, SYS_LED_PRIORITY_HIGHEST);
+	}
+	else
+	{
+		wait_for_logging();
+	}
 #if ADAFRUIT_BOOTLOADER // if using Adafruit bootloader, always skip dfu for next boot
 	(*dbl_reset_mem) = DFU_DBL_RESET_APP; // Skip DFU
 #endif
@@ -470,6 +492,8 @@ static void update_battery(int16_t battery_pptt)
 // TODO: call into other thread for handling the system state
 static void power_thread(void)
 {
+	set_led(SYS_LED_PATTERN_ACTIVE_PERSIST, SYS_LED_PRIORITY_SYSTEM); // TODO: allow disabling active pattern?
+
 	while (1)
 	{
 #if DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(uart0))
@@ -486,10 +510,13 @@ static void power_thread(void)
 			sys_WOM(true);
 			break;
 		case 3:
-			sys_system_off();
+			sys_system_off(false);
 			break;
 		case 4:
 			sys_system_reboot();
+			break;
+		case 5:
+			sys_system_off(true);
 			break;
 		default:
 			break;
@@ -500,9 +527,13 @@ static void power_thread(void)
 		bool charging = chg_read();
 		bool charged = stby_read();
 
-		float temp;
-		int chg_ret = sensor_get_sensor_temperature(&temp);
-		switch (chg_ret)
+		float die_temp;
+		float sensor_temp;
+		int sys_ret = sys_get_die_temperature(&die_temp);
+		int sensor_ret = sensor_get_sensor_temperature(&sensor_temp);
+		float min_temp = MIN(die_temp, sensor_temp);
+		float max_temp = MAX(die_temp, sensor_temp);
+		switch (sys_ret ? sensor_ret : sys_ret)
 		{
 		case -2:
 			last_valid_temp = -1;
@@ -517,20 +548,21 @@ static void power_thread(void)
 		case 0:
 			last_valid_temp = k_uptime_get();
 			// https://www.batteryuniversity.com/article/bu-410-charging-at-high-and-low-temperatures/
-			if (!chg_temp_warn && (temp < 5.f || temp > 45.f)) // this is still safe (hard limit is 0C, but that is dangerous)
+			if (!chg_temp_warn && (min_temp < 5.f || max_temp > 45.f)) // this is still safe (hard limit is 0C, but that is dangerous)
 				chg_temp_warn = true;
-			else if (chg_temp_warn && temp > 10.f && temp < 40.f) // safest range
+			else if (chg_temp_warn && min_temp > 10.f && max_temp < 40.f) // safest range
 				chg_temp_warn = false;
 		default:
 			break;
 		}
-		chg_ret = set_charger_enable(!chg_temp_warn, device_plugged);
+		int chg_ret = set_charger_enable(!chg_temp_warn, device_plugged);
 		// chg_ret = -1: outside safe temp range, but charger could not be disabled
 		// chg_ret = 0 and chg_temp_warn = true: out of temp range, charger is disabled or already has thermistor
+		LOG_DBG("Die: %.2f C, Sensor: %.2f C, sys: %d, sensor: %d, wrn: %d, plugged: %d, ret: %d", (double)die_temp, (double)sensor_temp, sys_ret, sensor_ret, chg_temp_warn, device_plugged, chg_ret);
 
 		int battery_mV;
 		int16_t battery_pptt = read_batt_mV(&battery_mV);
-		if (battery_level_pptt < 0)
+		if (battery_pptt < 0)
 			LOG_ERR("Failed to read battery voltage: %d", battery_pptt);
 		if (samples < BATTERY_SAMPLES)
 			samples++;
@@ -579,7 +611,7 @@ static void power_thread(void)
 			power_init = true;
 		}
 
-		if (battery_discharged || docked)
+		if ((battery_discharged && !device_plugged) || docked) // TODO: docked may or may not also mean device_plugged due to charging
 		{
 			if (battery_discharged)
 			{
@@ -620,18 +652,17 @@ static void power_thread(void)
 			set_led(SYS_LED_PATTERN_OFF, SYS_LED_PRIORITY_CRITICAL);
 
 		if (chg_temp_warn && plugged) // don't need to warn if not plugged in
-			set_led(SYS_LED_PATTERN_WARNING, SYS_LED_PRIORITY_SYSTEM); // not critical
+			set_led(SYS_LED_PATTERN_WARNING, SYS_LED_PRIORITY_CHARGER); // not critical
 		else if (charging)
-			set_led(SYS_LED_PATTERN_PULSE_PERSIST, SYS_LED_PRIORITY_SYSTEM);
+			set_led(SYS_LED_PATTERN_PULSE_PERSIST, SYS_LED_PRIORITY_CHARGER);
 		else if (charged)
-			set_led(SYS_LED_PATTERN_ON_PERSIST, SYS_LED_PRIORITY_SYSTEM);
+			set_led(SYS_LED_PATTERN_ON_PERSIST, SYS_LED_PRIORITY_CHARGER);
 		else if (plugged || usb_plugged)
-			set_led(SYS_LED_PATTERN_PULSE_PERSIST, SYS_LED_PRIORITY_SYSTEM);
+			set_led(SYS_LED_PATTERN_PULSE_PERSIST, SYS_LED_PRIORITY_CHARGER);
 		else if (battery_low)
-			set_led(SYS_LED_PATTERN_LONG_PERSIST, SYS_LED_PRIORITY_SYSTEM);
+			set_led(SYS_LED_PATTERN_LONG_PERSIST, SYS_LED_PRIORITY_CHARGER);
 		else
-			set_led(SYS_LED_PATTERN_ACTIVE_PERSIST, SYS_LED_PRIORITY_SYSTEM);
-//			set_led(SYS_LED_PATTERN_OFF, SYS_LED_PRIORITY_SYSTEM);
+			set_led(SYS_LED_PATTERN_OFF, SYS_LED_PRIORITY_CHARGER);
 
 		k_msleep(100);
 	}
